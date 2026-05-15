@@ -7,6 +7,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=DM+Sans:wght@400;500;600;700&display=swap');
   * { box-sizing: border-box; }
@@ -113,6 +114,7 @@ const Icon = ({ children, size = 16 }) => (
 );
 const Plus = (p) => <Icon {...p}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></Icon>;
 const Trash2 = (p) => <Icon {...p}><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></Icon>;
+const Upload = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></Icon>;
 const Copy = (p) => <Icon {...p}><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></Icon>;
 const Check = (p) => <Icon {...p}><polyline points="20 6 9 17 4 12"/></Icon>;
 const RotateCcw = (p) => <Icon {...p}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></Icon>;
@@ -211,6 +213,9 @@ function App() {
   const [wizardCreator, setWizardCreator] = useState('');
   const [wizardCount, setWizardCount] = useState(3);
   const [staggerOverridden, setStaggerOverridden] = useState(false);
+  const [importedData, setImportedData] = useState({ igDates: {}, fbDates: {}, twitterDates: {}, threadsDates: {}, importedAt: null, fileName: '' });
+  const [importError, setImportError] = useState('');
+  const [importBusy, setImportBusy] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -237,6 +242,16 @@ function App() {
             setCreatorAccounts(migrated);
           }
           if (typeof s.staggerOverridden === 'boolean') setStaggerOverridden(s.staggerOverridden);
+          if (s.importedData && typeof s.importedData === 'object') {
+            setImportedData({
+              igDates: s.importedData.igDates || {},
+              fbDates: s.importedData.fbDates || {},
+              twitterDates: s.importedData.twitterDates || {},
+              threadsDates: s.importedData.threadsDates || {},
+              importedAt: s.importedData.importedAt || null,
+              fileName: s.importedData.fileName || ''
+            });
+          }
         }
       } catch (e) {}
       setLoaded(true);
@@ -245,9 +260,9 @@ function App() {
 
   useEffect(() => {
     if (!loaded) return;
-    const state = { staggerDays, includeHeaders, dateFormat, accounts, hooks, creators, creatorAccounts, staggerOverridden };
+    const state = { staggerDays, includeHeaders, dateFormat, accounts, hooks, creators, creatorAccounts, staggerOverridden, importedData };
     window.storage.set(STORAGE_KEY, JSON.stringify(state)).catch(() => {});
-  }, [staggerDays, includeHeaders, dateFormat, accounts, hooks, creators, creatorAccounts, staggerOverridden, loaded]);
+  }, [staggerDays, includeHeaders, dateFormat, accounts, hooks, creators, creatorAccounts, staggerOverridden, importedData, loaded]);
 
   // Load versions
   useEffect(() => {
@@ -301,6 +316,132 @@ function App() {
       ...p,
       [creator]: (p[creator] || []).map(a => a.ig === igName ? { ...a, ...patch } : a)
     }));
+  };
+
+  // Pull the latest dates for an IG account from the imported XLSX data
+  const getImportedDatesForIG = (creator, igName) => {
+    if (!igName) return { ig: '', fb: '', twitter: '', threads: '' };
+    const mapping = getAccountMapping(creator, igName);
+    return {
+      ig: importedData.igDates[igName] || '',
+      fb: mapping.fb ? (importedData.fbDates[mapping.fb] || '') : '',
+      twitter: mapping.twitter ? (importedData.twitterDates[mapping.twitter] || '') : '',
+      threads: mapping.threads ? (importedData.threadsDates[mapping.threads] || '') : ''
+    };
+  };
+
+  // Excel-serial-or-date-string → YYYY-MM-DD
+  const toISODate = (v) => {
+    if (v == null || v === '') return '';
+    if (v instanceof Date) {
+      if (isNaN(v)) return '';
+      const yyyy = v.getFullYear();
+      const mm = String(v.getMonth() + 1).padStart(2, '0');
+      const dd = String(v.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    if (typeof v === 'number') {
+      // Excel serial date — days since 1899-12-30 (SheetJS convention)
+      const ms = Math.round((v - 25569) * 86400 * 1000);
+      const d = new Date(ms);
+      if (isNaN(d)) return '';
+      return toISODate(d);
+    }
+    if (typeof v === 'string') {
+      const s = v.trim();
+      if (!s) return '';
+      // ISO YYYY-MM-DD already
+      let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+      // M/D/YYYY (US format from Google Sheets export)
+      m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+      if (m) {
+        let yr = +m[3];
+        if (yr < 100) yr += 2000;
+        return `${yr}-${String(+m[1]).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`;
+      }
+      // Fallback: native parser
+      const d = new Date(s);
+      if (!isNaN(d)) return toISODate(d);
+    }
+    return '';
+  };
+
+  const parseXLSXFile = async (file) => {
+    if (typeof XLSX === 'undefined') {
+      throw new Error('XLSX library failed to load. Check your connection and refresh.');
+    }
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+
+    // For a given sheet name, find max date per account
+    const collectMaxDates = (sheetName, dateColIdx, accountColIdx) => {
+      const sheet = wb.Sheets[sheetName];
+      if (!sheet) return {};
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+      if (rows.length < 2) return {};
+      const maxByAcc = {};
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row) continue;
+        const dateVal = row[dateColIdx];
+        const accountVal = row[accountColIdx];
+        if (!dateVal || !accountVal) continue;
+        const iso = toISODate(dateVal);
+        if (!iso) continue;
+        const acc = String(accountVal).trim();
+        if (!acc) continue;
+        if (!maxByAcc[acc] || iso > maxByAcc[acc]) maxByAcc[acc] = iso;
+      }
+      return maxByAcc;
+    };
+
+    const igDates = collectMaxDates('IG_Posting_Grid', 0, 2);
+    const fbDates = collectMaxDates('IG_Posting_Grid', 12, 13);
+    const twitterDates = collectMaxDates('Twitter_Posting_Grid', 0, 3);
+    const threadsDates = collectMaxDates('Threads_Posting_Grid', 0, 3);
+
+    // Sanity check — at least one sheet should have produced data
+    const totalEntries = Object.keys(igDates).length + Object.keys(fbDates).length + Object.keys(twitterDates).length + Object.keys(threadsDates).length;
+    if (totalEntries === 0) {
+      throw new Error('No dated rows found in IG_Posting_Grid, Twitter_Posting_Grid, or Threads_Posting_Grid. Check that sheet names match exactly and the Date columns contain dates.');
+    }
+
+    return { igDates, fbDates, twitterDates, threadsDates, importedAt: new Date().toISOString(), fileName: file.name };
+  };
+
+  const handleXLSXUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ''; // allow re-upload of same file
+    setImportBusy(true);
+    setImportError('');
+    try {
+      const parsed = await parseXLSXFile(file);
+      setImportedData(parsed);
+
+      // Backfill any empty date fields on existing accounts
+      setAccounts(prev => prev.map(acc => {
+        if (!acc.name) return acc;
+        const mapping = getAccountMapping(acc.creator, acc.name);
+        const updates = {};
+        if (!acc.lastPostDate && parsed.igDates[acc.name]) updates.lastPostDate = parsed.igDates[acc.name];
+        if (mapping.fb && !acc.fbLastPostDate && parsed.fbDates[mapping.fb]) updates.fbLastPostDate = parsed.fbDates[mapping.fb];
+        if (mapping.twitter && !acc.twitterLastPostDate && parsed.twitterDates[mapping.twitter]) updates.twitterLastPostDate = parsed.twitterDates[mapping.twitter];
+        if (mapping.threads && !acc.threadsLastPostDate && parsed.threadsDates[mapping.threads]) updates.threadsLastPostDate = parsed.threadsDates[mapping.threads];
+        return Object.keys(updates).length ? { ...acc, ...updates } : acc;
+      }));
+    } catch (err) {
+      setImportError(err.message || String(err));
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const clearImportedData = () => {
+    if (!window.confirm('Clear imported spreadsheet data? You can re-upload anytime.')) return;
+    setImportedData({ igDates: {}, fbDates: {}, twitterDates: {}, threadsDates: {}, importedAt: null, fileName: '' });
+    setImportError('');
   };
 
   const removeCreator = (name) => {
@@ -898,12 +1039,76 @@ function App() {
           </p>
         </div>
 
+        <section className="mb-6">
+          {importedData.importedAt ? (
+            <div className="card p-4" style={{ borderColor: 'var(--accent)', background: 'rgba(194, 65, 12, 0.04)' }}>
+              <div className="flex items-center justify-between" style={{ flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ flex: 1, minWidth: '240px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <span style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '14px' }}>✓ Master grid imported</span>
+                    <span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'ui-monospace, monospace' }}>{importedData.fileName}</span>
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                    Loaded last-post dates for{' '}
+                    <strong style={{ color: 'var(--text)' }}>{Object.keys(importedData.igDates).length}</strong> IG ·{' '}
+                    <strong style={{ color: 'var(--text)' }}>{Object.keys(importedData.fbDates).length}</strong> FB ·{' '}
+                    <strong style={{ color: 'var(--text)' }}>{Object.keys(importedData.twitterDates).length}</strong> Twitter ·{' '}
+                    <strong style={{ color: 'var(--text)' }}>{Object.keys(importedData.threadsDates).length}</strong> Threads.{' '}
+                    Imported {new Date(importedData.importedAt).toLocaleString()}.
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <label className="btn-secondary" style={{ cursor: importBusy ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+                    <Upload size={14} />
+                    {importBusy ? 'Importing…' : 'Re-upload'}
+                    <input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleXLSXUpload} disabled={importBusy} style={{ display: 'none' }} />
+                  </label>
+                  <button onClick={clearImportedData} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <Trash2 size={14} /> Clear
+                  </button>
+                </div>
+              </div>
+              {importError && (
+                <div style={{ marginTop: '10px', padding: '8px 12px', background: 'rgba(194, 65, 12, 0.08)', borderLeft: '3px solid var(--accent)', borderRadius: '4px', fontSize: '12px', color: 'var(--accent)' }}>
+                  {importError}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="card p-5">
+              <h2 className="font-display mb-2" style={{ fontWeight: 600, fontSize: '18px' }}>Step 1 · Upload your master spreadsheet</h2>
+              <p style={{ color: 'var(--muted)', fontSize: '13px', marginBottom: '14px', lineHeight: 1.5 }}>
+                Upload <code>Master_Social_Content_Grid.xlsx</code> so last-post dates for IG, Facebook, Twitter, and Threads are filled in automatically. Without it, you'll have to enter every date by hand.
+              </p>
+              <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+                <label className="btn-primary" style={{ cursor: importBusy ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+                  <Upload size={14} />
+                  {importBusy ? 'Reading sheet…' : 'Upload XLSX'}
+                  <input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleXLSXUpload} disabled={importBusy} style={{ display: 'none' }} />
+                </label>
+                <span style={{ fontSize: '12px', color: 'var(--muted)', alignSelf: 'center' }}>
+                  or skip and fill last-post dates manually below
+                </span>
+              </div>
+              {importError && (
+                <div style={{ marginTop: '10px', padding: '8px 12px', background: 'rgba(194, 65, 12, 0.08)', borderLeft: '3px solid var(--accent)', borderRadius: '4px', fontSize: '12px', color: 'var(--accent)' }}>
+                  {importError}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
         <section className="mb-8">
           {inWizard ? (
             <div className="card p-5" style={{ maxWidth: '560px' }}>
-              <h2 className="font-display mb-2" style={{ fontWeight: 600, fontSize: '22px' }}>Start a new session</h2>
+              <h2 className="font-display mb-2" style={{ fontWeight: 600, fontSize: '22px' }}>
+                {importedData.importedAt ? 'Step 2 · Pick creator and accounts' : 'Start a new session'}
+              </h2>
               <p style={{ color: 'var(--muted)', fontSize: '14px', marginBottom: '20px', lineHeight: 1.5 }}>
-                Pick which creator you're planning content for and how many of their accounts to include.
+                {importedData.importedAt
+                  ? "Pick which creator you're planning for and how many of their accounts to include. Last-post dates fill in automatically from the spreadsheet."
+                  : "Pick which creator you're planning content for and how many of their accounts to include."}
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                 <div>
@@ -977,7 +1182,20 @@ function App() {
                           </label>
                           <select
                             value={acc.name}
-                            onChange={e => updateAccount(i, 'name', e.target.value)}
+                            onChange={e => {
+                              const newName = e.target.value;
+                              const dates = getImportedDatesForIG(acc.creator, newName);
+                              setAccounts(p => p.map((a, idx) => {
+                                if (idx !== i) return a;
+                                const next = { ...a, name: newName };
+                                // Only auto-fill empty fields, never overwrite manual entries
+                                if (!a.lastPostDate && dates.ig) next.lastPostDate = dates.ig;
+                                if (!a.fbLastPostDate && dates.fb) next.fbLastPostDate = dates.fb;
+                                if (!a.twitterLastPostDate && dates.twitter) next.twitterLastPostDate = dates.twitter;
+                                if (!a.threadsLastPostDate && dates.threads) next.threadsLastPostDate = dates.threads;
+                                return next;
+                              }));
+                            }}
                             disabled={!acc.creator}
                             style={{ borderColor: nameEmpty ? 'var(--accent)' : undefined }}
                           >
@@ -989,8 +1207,11 @@ function App() {
                           </select>
                         </div>
                         <div className="md:col-span-3">
-                          <label className="label" style={{ color: dateEmpty ? 'var(--accent)' : undefined }}>
-                            IG last post {dateEmpty && '· fill this'}
+                          <label className="label" style={{ color: dateEmpty ? 'var(--accent)' : undefined, display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <span>IG last post {dateEmpty && '· fill this'}</span>
+                            {acc.name && importedData.igDates[acc.name] && acc.lastPostDate === importedData.igDates[acc.name] && (
+                              <span style={{ fontSize: '9px', padding: '1px 6px', background: 'var(--accent)', color: 'white', borderRadius: '8px', textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>from sheet</span>
+                            )}
                           </label>
                           <input
                             type="date"
@@ -1012,8 +1233,11 @@ function App() {
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                             {mapping.fb ? (
                               <div>
-                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)' }}>
-                                  Facebook · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.fb}</span>
+                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                  <span>Facebook · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.fb}</span></span>
+                                  {importedData.fbDates[mapping.fb] && acc.fbLastPostDate === importedData.fbDates[mapping.fb] && (
+                                    <span style={{ fontSize: '9px', padding: '1px 6px', background: 'var(--accent)', color: 'white', borderRadius: '8px', letterSpacing: 0, fontWeight: 500 }}>from sheet</span>
+                                  )}
                                 </label>
                                 <input type="date" value={acc.fbLastPostDate || ''} onChange={e => updateAccount(i, 'fbLastPostDate', e.target.value)} />
                               </div>
@@ -1024,8 +1248,11 @@ function App() {
                             )}
                             {mapping.twitter ? (
                               <div>
-                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)' }}>
-                                  Twitter · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.twitter}</span>
+                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                  <span>Twitter · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.twitter}</span></span>
+                                  {importedData.twitterDates[mapping.twitter] && acc.twitterLastPostDate === importedData.twitterDates[mapping.twitter] && (
+                                    <span style={{ fontSize: '9px', padding: '1px 6px', background: 'var(--accent)', color: 'white', borderRadius: '8px', letterSpacing: 0, fontWeight: 500 }}>from sheet</span>
+                                  )}
                                 </label>
                                 <input type="date" value={acc.twitterLastPostDate || ''} onChange={e => updateAccount(i, 'twitterLastPostDate', e.target.value)} />
                               </div>
@@ -1036,8 +1263,11 @@ function App() {
                             )}
                             {mapping.threads ? (
                               <div>
-                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)' }}>
-                                  Threads · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.threads}</span>
+                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                  <span>Threads · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.threads}</span></span>
+                                  {importedData.threadsDates[mapping.threads] && acc.threadsLastPostDate === importedData.threadsDates[mapping.threads] && (
+                                    <span style={{ fontSize: '9px', padding: '1px 6px', background: 'var(--accent)', color: 'white', borderRadius: '8px', letterSpacing: 0, fontWeight: 500 }}>from sheet</span>
+                                  )}
                                 </label>
                                 <input type="date" value={acc.threadsLastPostDate || ''} onChange={e => updateAccount(i, 'threadsLastPostDate', e.target.value)} />
                               </div>
