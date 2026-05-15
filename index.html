@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IG Grid Planner — AWM</title>
+<title>Master Social Grid Planner — AWM</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -745,7 +745,7 @@ function App() {
         </button>
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {[
-            { id: 'planner', label: 'IG Grid Planner', Icon: Grid },
+            { id: 'planner', label: 'Master Social Grid Planner', Icon: Grid },
             { id: 'manage', label: 'Manage Directory', Icon: Users },
             { id: 'history', label: 'Version History', Icon: Clock }
           ].map(item => {
@@ -892,7 +892,7 @@ function App() {
       <div className="max-w-6xl mx-auto px-6 py-8">
       {currentView === 'planner' && (<>
         <div className="mb-8 pb-6 border-b">
-          <h1 className="font-display" style={{ fontWeight: 600, letterSpacing: '-0.02em', fontSize: '36px', lineHeight: 1.1 }}>IG Grid Planner</h1>
+          <h1 className="font-display" style={{ fontWeight: 600, letterSpacing: '-0.02em', fontSize: '36px', lineHeight: 1.1 }}>Master Social Grid Planner</h1>
           <p className="mt-2" style={{ color: 'var(--muted)', fontSize: '15px' }}>
             Stagger hooks across accounts, generate paste-ready rows for the content sheet.
           </p>
@@ -1485,7 +1485,10 @@ function App() {
                           {(creatorAccounts[c] || []).map(a => (
                             <div key={a.ig} style={{ padding: '10px 12px', marginLeft: '12px', background: 'var(--bg)', borderRadius: '6px' }}>
                               <div className="flex items-center justify-between" style={{ marginBottom: '8px' }}>
-                                <span style={{ fontSize: '13px', fontWeight: 600, fontFamily: 'ui-monospace, monospace' }}>{a.ig}</span>
+                                <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '8px' }}>
+                                  <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Instagram Account</span>
+                                  <span style={{ fontSize: '13px', fontWeight: 600, fontFamily: 'ui-monospace, monospace' }}>{a.ig}</span>
+                                </span>
                                 <button onClick={() => removeAccountFromCreator(c, a.ig)} className="btn-icon" title={`Remove ${a.ig}`}>
                                   <Trash2 size={14} />
                                 </button>
