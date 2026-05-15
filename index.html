@@ -134,6 +134,16 @@ const COLUMN_HEADERS = [
   'Facebook Date', 'Facebook Account', 'Facebook Status', 'Facebook Notes'
 ];
 
+const COLUMN_HEADERS_TWITTER = [
+  'Date', 'Posting time', 'Creator', 'Twitter Account', 'Inspiration',
+  'Hook ID', 'Hook Text', 'Visual Source / Shot', 'Status', 'Twitter Notes'
+];
+
+const COLUMN_HEADERS_THREADS = [
+  'Date', 'Posting time', 'Creator', 'Threads Account', 'Inspiration',
+  'Hook ID', 'Hook Text', 'Visual Source / Shot', 'Status', 'Threads Notes'
+];
+
 const STORAGE_KEY = 'awm-reels-planner-v1';
 const VERSIONS_KEY = 'awm-reels-planner-versions';
 const MAX_VERSIONS = 30;
@@ -165,8 +175,8 @@ function App() {
   const [dateFormat, setDateFormat] = useState('us');
   const [accounts, setAccounts] = useState([]);
   const [hooks, setHooks] = useState([]);
-  const [output, setOutput] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [output, setOutput] = useState({ igFb: '', twitter: '', threads: '', error: '' });
+  const [copied, setCopied] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
@@ -174,9 +184,20 @@ function App() {
   const [showStaggerInfo, setShowStaggerInfo] = useState(true);
   const [creators, setCreators] = useState(['Sydney', 'Nora', 'Violet']);
   const [creatorAccounts, setCreatorAccounts] = useState({
-    Sydney: ['sydney.tayylorr', 'sydneytbby', 'petitemomsydney'],
-    Nora: ['norakatedavis', 'tastelessnor', 'noradavisxo'],
-    Violet: ['iits_violetmae', 'violetxomae']
+    Sydney: [
+      { ig: 'sydney.tayylorr', fb: '', twitter: '', threads: '' },
+      { ig: 'sydneytbby', fb: '', twitter: '', threads: '' },
+      { ig: 'petitemomsydney', fb: '', twitter: '', threads: '' }
+    ],
+    Nora: [
+      { ig: 'norakatedavis', fb: '', twitter: '', threads: '' },
+      { ig: 'tastelessnor', fb: '', twitter: '', threads: '' },
+      { ig: 'noradavisxo', fb: '', twitter: '', threads: '' }
+    ],
+    Violet: [
+      { ig: 'iits_violetmae', fb: '', twitter: '', threads: '' },
+      { ig: 'violetxomae', fb: '', twitter: '', threads: '' }
+    ]
   });
   const [newCreatorName, setNewCreatorName] = useState('');
   const [newAccountName, setNewAccountName] = useState('');
@@ -203,7 +224,18 @@ function App() {
           if (Array.isArray(s.accounts)) setAccounts(s.accounts);
           if (Array.isArray(s.hooks)) setHooks(s.hooks);
           if (Array.isArray(s.creators)) setCreators(s.creators);
-          if (s.creatorAccounts && typeof s.creatorAccounts === 'object') setCreatorAccounts(s.creatorAccounts);
+          if (s.creatorAccounts && typeof s.creatorAccounts === 'object') {
+            // Migrate old shape (arrays of strings) → new shape (arrays of objects with fb/twitter/threads)
+            const migrated = {};
+            for (const [creator, accs] of Object.entries(s.creatorAccounts)) {
+              if (!Array.isArray(accs)) continue;
+              migrated[creator] = accs.map(a => {
+                if (typeof a === 'string') return { ig: a, fb: '', twitter: '', threads: '' };
+                return { ig: a.ig || '', fb: a.fb || '', twitter: a.twitter || '', threads: a.threads || '' };
+              });
+            }
+            setCreatorAccounts(migrated);
+          }
           if (typeof s.staggerOverridden === 'boolean') setStaggerOverridden(s.staggerOverridden);
         }
       } catch (e) {}
@@ -258,6 +290,19 @@ function App() {
     setCreatorAccounts(p => ({ ...p, [name]: p[name] || [] }));
     setNewCreatorName('');
   };
+  // Helpers for the new IG-account-object shape
+  const getIGNamesForCreator = (creator) => (creatorAccounts[creator] || []).map(a => a.ig).filter(Boolean);
+  const getAccountMapping = (creator, igName) => {
+    const accs = creatorAccounts[creator] || [];
+    return accs.find(a => a.ig === igName) || { ig: igName, fb: '', twitter: '', threads: '' };
+  };
+  const updateAccountMapping = (creator, igName, patch) => {
+    setCreatorAccounts(p => ({
+      ...p,
+      [creator]: (p[creator] || []).map(a => a.ig === igName ? { ...a, ...patch } : a)
+    }));
+  };
+
   const removeCreator = (name) => {
     const count = (creatorAccounts[name] || []).length;
     const msg = count > 0
@@ -273,13 +318,13 @@ function App() {
     if (!c) { window.alert('Select a creator first.'); return; }
     if (!a) return;
     const existing = creatorAccounts[c] || [];
-    if (existing.includes(a)) { window.alert('That account already exists for ' + c + '.'); return; }
-    setCreatorAccounts(p => ({ ...p, [c]: [...(p[c] || []), a] }));
+    if (existing.some(x => x.ig === a)) { window.alert('That account already exists for ' + c + '.'); return; }
+    setCreatorAccounts(p => ({ ...p, [c]: [...(p[c] || []), { ig: a, fb: '', twitter: '', threads: '' }] }));
     setNewAccountName('');
   };
-  const removeAccountFromCreator = (creator, account) => {
-    if (!window.confirm(`Remove ${account} from ${creator}?`)) return;
-    setCreatorAccounts(p => ({ ...p, [creator]: (p[creator] || []).filter(a => a !== account) }));
+  const removeAccountFromCreator = (creator, igName) => {
+    if (!window.confirm(`Remove ${igName} from ${creator}?`)) return;
+    setCreatorAccounts(p => ({ ...p, [creator]: (p[creator] || []).filter(a => a.ig !== igName) }));
   };
 
   const startSession = () => {
@@ -292,7 +337,7 @@ function App() {
     }));
     setAccounts(newAccounts);
     setHooks([]);
-    setOutput('');
+    setOutput({ igFb: '', twitter: '', threads: '', error: '' });
   };
 
   const detectCreator = (accs) => {
@@ -350,7 +395,15 @@ function App() {
     }
     setAccounts(v.data.accounts || []);
     setHooks(v.data.hooks || []);
-    setOutput(v.data.output || '');
+    const savedOut = v.data.output;
+    if (typeof savedOut === 'string') {
+      // Legacy version: treat as IG/FB only
+      setOutput({ igFb: savedOut, twitter: '', threads: '', error: '' });
+    } else if (savedOut && typeof savedOut === 'object') {
+      setOutput({ igFb: savedOut.igFb || '', twitter: savedOut.twitter || '', threads: savedOut.threads || '', igFbCount: savedOut.igFbCount, twitterCount: savedOut.twitterCount, threadsCount: savedOut.threadsCount, error: '' });
+    } else {
+      setOutput({ igFb: '', twitter: '', threads: '', error: '' });
+    }
     setStaggerDays(v.data.staggerDays ?? 4);
     setStaggerOverridden(v.data.staggerOverridden ?? false);
     setCollapsedHooks({});
@@ -442,6 +495,9 @@ function App() {
     inspiration: '',
     caption: '',
     captionMode: 'same',
+    crossPostFacebook: true,
+    crossPostTwitter: true,
+    crossPostThreads: true,
     perAccount: accounts.map(() => ({ visual: '', sound: '', caption: '' }))
   }]);
   const removeHook = (i) => setHooks(p => p.filter((_, idx) => idx !== i));
@@ -463,6 +519,9 @@ function App() {
       inspiration: '',
       caption: '',
       captionMode: 'same',
+      crossPostFacebook: true,
+      crossPostTwitter: true,
+      crossPostThreads: true,
       perAccount: accounts.map(() => ({ visual: '', sound: '', caption: '' }))
     }));
     setHooks(p => [...p, ...newHooks]);
@@ -479,36 +538,77 @@ function App() {
 
   const generate = () => {
     const validAccounts = accounts.filter(a => a.lastPostDate);
-    if (validAccounts.length === 0) { setOutput('⚠ At least one account needs a "last post date" set.'); return; }
-    if (hooks.length === 0) { setOutput('⚠ Add at least one hook.'); return; }
+    if (validAccounts.length === 0) { setOutput({ error: '⚠ At least one account needs a "last post date" set.' }); return; }
+    if (hooks.length === 0) { setOutput({ error: '⚠ Add at least one hook.' }); return; }
 
     const N = hooks.length;
     const S = parseInt(staggerDays) || 0;
 
     if (S > 0 && validAccounts.length > 1 && S % N === 0) {
       const suggestion = N === 2 ? 'a stagger of 1' : `a stagger of 1 to ${N - 1}`;
-      setOutput(`⚠ Stagger of ${S} with ${N} hook${N !== 1 ? 's' : ''} doesn't actually stagger anything — ${S} is a multiple of ${N}, so every account ends up posting the same hook on the same day of its own run. Use ${suggestion}, or add more hooks.`);
+      setOutput({ error: `⚠ Stagger of ${S} with ${N} hook${N !== 1 ? 's' : ''} doesn't actually stagger anything — ${S} is a multiple of ${N}, so every account ends up posting the same hook on the same day of its own run. Use ${suggestion}, or add more hooks.` });
       return;
     }
 
-    const rows = [];
+    const igFbRows = [];
+    const twitterRows = [];
+    const threadsRows = [];
 
     accounts.forEach((acc, i) => {
       if (!acc.lastPostDate) return;
-      const offset = ((i * S) % N + N) % N;
-      const start = new Date(acc.lastPostDate + 'T00:00:00');
-      start.setDate(start.getDate() + 1);
+      const mapping = acc.name ? getAccountMapping(acc.creator, acc.name) : { fb: '', twitter: '', threads: '' };
 
+      const offset = ((i * S) % N + N) % N;
+      const igStart = new Date(acc.lastPostDate + 'T00:00:00');
+      igStart.setDate(igStart.getDate() + 1);
+
+      // Build the IG cycle order — array of { hookIdx, igDate }
+      const cycle = [];
       for (let d = 0; d < N; d++) {
         const hookIdx = ((d - offset) % N + N) % N;
+        const igDate = new Date(igStart);
+        igDate.setDate(igDate.getDate() + d);
+        cycle.push({ hookIdx, igDate });
+      }
+
+      // Build platform queues — date assigned only to cross-post-eligible hooks
+      // Skips do not consume a slot, so eligible hooks post on consecutive days
+      const buildQueue = (lastDateStr, isEligibleFn) => {
+        if (!lastDateStr) return {};
+        const cursor = new Date(lastDateStr + 'T00:00:00');
+        cursor.setDate(cursor.getDate() + 1);
+        const out = {};
+        cycle.forEach(({ hookIdx }) => {
+          const hook = hooks[hookIdx];
+          if (isEligibleFn(hook)) {
+            out[hookIdx] = new Date(cursor);
+            cursor.setDate(cursor.getDate() + 1);
+          }
+        });
+        return out;
+      };
+
+      const fbDateByHook = mapping.fb
+        ? buildQueue(acc.fbLastPostDate, h => h.crossPostFacebook !== false)
+        : {};
+      const twDateByHook = mapping.twitter
+        ? buildQueue(acc.twitterLastPostDate, h => h.crossPostTwitter !== false)
+        : {};
+      const thDateByHook = mapping.threads
+        ? buildQueue(acc.threadsLastPostDate, h => h.crossPostThreads !== false)
+        : {};
+
+      // Emit rows
+      cycle.forEach(({ hookIdx, igDate }) => {
         const hook = hooks[hookIdx];
-        const postDate = new Date(start);
-        postDate.setDate(postDate.getDate() + d);
         const pa = hook.perAccount?.[i] || { visual: '', sound: '', caption: '' };
         const captionForRow = hook.captionMode === 'separate' ? (pa.caption || '') : (hook.caption || '');
 
-        rows.push([
-          formatDate(postDate),
+        // IG/FB row
+        const fbDate = fbDateByHook[hookIdx];
+        const fbIsSkip = mapping.fb && hook.crossPostFacebook === false;
+        igFbRows.push([
+          formatDate(igDate),
           acc.creator || '',
           acc.name || '',
           hook.format || 'Feed Post',
@@ -518,48 +618,105 @@ function App() {
           pa.sound || '',
           pa.visual || '',
           captionForRow,
-          '', '', '', '', '', ''
+          '', // Status
+          '', // Post ID
+          fbDate ? formatDate(fbDate) : '',
+          mapping.fb || '', // FB Account name (shown if mapped, blank otherwise)
+          fbIsSkip ? 'Skip' : '',
+          '' // FB Notes
         ]);
-      }
+
+        // Twitter row — only if mapped, eligible, and last date set
+        if (mapping.twitter && hook.crossPostTwitter !== false && twDateByHook[hookIdx]) {
+          twitterRows.push([
+            formatDate(twDateByHook[hookIdx]),
+            '', // Posting time
+            acc.creator || '',
+            mapping.twitter,
+            '', // Inspiration (blank; filled later with IG URL)
+            hook.id || '',
+            hook.text || '',
+            pa.visual || '',
+            '', // Status
+            ''  // Twitter Notes
+          ]);
+        }
+
+        // Threads row
+        if (mapping.threads && hook.crossPostThreads !== false && thDateByHook[hookIdx]) {
+          threadsRows.push([
+            formatDate(thDateByHook[hookIdx]),
+            '',
+            acc.creator || '',
+            mapping.threads,
+            '',
+            hook.id || '',
+            hook.text || '',
+            pa.visual || '',
+            '',
+            ''
+          ]);
+        }
+      });
     });
 
-    rows.sort((a, b) => {
+    const sortByDateThenAccount = (rows, accColIdx) => rows.sort((a, b) => {
       const da = new Date(a[0]);
       const db = new Date(b[0]);
       if (da - db !== 0) return da - db;
-      return a[2].localeCompare(b[2]);
+      return (a[accColIdx] || '').localeCompare(b[accColIdx] || '');
     });
+
+    sortByDateThenAccount(igFbRows, 2);
+    sortByDateThenAccount(twitterRows, 3);
+    sortByDateThenAccount(threadsRows, 3);
 
     const tsvEscape = (v) => {
       if (v == null || v === '') return '';
       const s = String(v);
-      if (/[\n\r\t"]/.test(s)) {
-        return '"' + s.replace(/"/g, '""') + '"';
-      }
+      if (/[\n\r\t"]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
       return s;
     };
+    const buildTSV = (rows, headers) => {
+      if (rows.length === 0) return '';
+      let tsv = rows.map(r => r.map(tsvEscape).join('\t')).join('\n');
+      if (includeHeaders) tsv = headers.join('\t') + '\n' + tsv;
+      return tsv;
+    };
 
-    let tsv = rows.map(r => r.map(tsvEscape).join('\t')).join('\n');
-    if (includeHeaders) tsv = COLUMN_HEADERS.join('\t') + '\n' + tsv;
-    setOutput(tsv);
+    setOutput({
+      igFb: buildTSV(igFbRows, COLUMN_HEADERS),
+      twitter: buildTSV(twitterRows, COLUMN_HEADERS_TWITTER),
+      threads: buildTSV(threadsRows, COLUMN_HEADERS_THREADS),
+      igFbCount: igFbRows.length,
+      twitterCount: twitterRows.length,
+      threadsCount: threadsRows.length,
+      error: ''
+    });
   };
 
-  const copyOutput = async () => {
+  const copyOutput = async (platform) => {
     try {
-      await navigator.clipboard.writeText(output);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      const text = (output && output[platform]) || '';
+      if (!text) return;
+      await navigator.clipboard.writeText(text);
+      setCopied(platform);
+      setTimeout(() => setCopied(''), 1500);
     } catch (e) {}
   };
 
   const clearHooks = () => {
     if (!window.confirm('Clear all hooks? (Accounts will be kept.)')) return;
     setHooks([]);
-    setOutput('');
+    setOutput({ igFb: '', twitter: '', threads: '', error: '' });
     setCollapsedHooks({});
   };
 
-  const outputRowCount = output ? output.split('\n').filter(l => l.trim()).length : 0;
+  const countRows = (tsv) => {
+    if (!tsv) return 0;
+    const lines = tsv.split('\n').filter(l => l.trim()).length;
+    return includeHeaders ? Math.max(0, lines - 1) : lines;
+  };
 
   return (
     <div className="font-body" style={{ background: 'var(--bg)', minHeight: '100vh', color: 'var(--text)', display: 'flex' }}>
@@ -789,6 +946,11 @@ function App() {
                 {accounts.map((acc, i) => {
                   const nameEmpty = !acc.name;
                   const dateEmpty = !acc.lastPostDate;
+                  const mapping = acc.name ? getAccountMapping(acc.creator, acc.name) : { fb: '', twitter: '', threads: '' };
+                  const unmappedPlatforms = [];
+                  if (acc.name && !mapping.fb) unmappedPlatforms.push('Facebook');
+                  if (acc.name && !mapping.twitter) unmappedPlatforms.push('Twitter');
+                  if (acc.name && !mapping.threads) unmappedPlatforms.push('Threads');
                   return (
                     <div key={i} className="card p-4">
                       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
@@ -811,7 +973,7 @@ function App() {
                         </div>
                         <div className="md:col-span-4">
                           <label className="label" style={{ color: nameEmpty ? 'var(--accent)' : undefined }}>
-                            Account {nameEmpty && '· fill this'}
+                            IG Account {nameEmpty && '· fill this'}
                           </label>
                           <select
                             value={acc.name}
@@ -820,15 +982,15 @@ function App() {
                             style={{ borderColor: nameEmpty ? 'var(--accent)' : undefined }}
                           >
                             <option value="">{acc.creator ? 'Select account' : 'Choose creator first'}</option>
-                            {(creatorAccounts[acc.creator] || []).map(n => <option key={n} value={n}>{n}</option>)}
-                            {acc.name && acc.creator && !(creatorAccounts[acc.creator] || []).includes(acc.name) && (
+                            {getIGNamesForCreator(acc.creator).map(n => <option key={n} value={n}>{n}</option>)}
+                            {acc.name && acc.creator && !getIGNamesForCreator(acc.creator).includes(acc.name) && (
                               <option value={acc.name}>{acc.name} (legacy)</option>
                             )}
                           </select>
                         </div>
                         <div className="md:col-span-3">
                           <label className="label" style={{ color: dateEmpty ? 'var(--accent)' : undefined }}>
-                            Last post date {dateEmpty && '· fill this'}
+                            IG last post {dateEmpty && '· fill this'}
                           </label>
                           <input
                             type="date"
@@ -843,6 +1005,55 @@ function App() {
                           </button>
                         </div>
                       </div>
+
+                      {acc.name && (
+                        <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px dashed var(--border)' }}>
+                          <div className="label" style={{ marginBottom: '8px' }}>Cross-platform last post dates</div>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            {mapping.fb ? (
+                              <div>
+                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)' }}>
+                                  Facebook · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.fb}</span>
+                                </label>
+                                <input type="date" value={acc.fbLastPostDate || ''} onChange={e => updateAccount(i, 'fbLastPostDate', e.target.value)} />
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '11px', color: 'var(--muted)', padding: '8px', background: 'var(--bg)', borderRadius: '4px', alignSelf: 'end' }}>
+                                Facebook not mapped
+                              </div>
+                            )}
+                            {mapping.twitter ? (
+                              <div>
+                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)' }}>
+                                  Twitter · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.twitter}</span>
+                                </label>
+                                <input type="date" value={acc.twitterLastPostDate || ''} onChange={e => updateAccount(i, 'twitterLastPostDate', e.target.value)} />
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '11px', color: 'var(--muted)', padding: '8px', background: 'var(--bg)', borderRadius: '4px', alignSelf: 'end' }}>
+                                Twitter not mapped
+                              </div>
+                            )}
+                            {mapping.threads ? (
+                              <div>
+                                <label className="label" style={{ textTransform: 'none', fontSize: '11px', color: 'var(--muted)' }}>
+                                  Threads · <span style={{ color: 'var(--text)', fontFamily: 'ui-monospace, monospace' }}>{mapping.threads}</span>
+                                </label>
+                                <input type="date" value={acc.threadsLastPostDate || ''} onChange={e => updateAccount(i, 'threadsLastPostDate', e.target.value)} />
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '11px', color: 'var(--muted)', padding: '8px', background: 'var(--bg)', borderRadius: '4px', alignSelf: 'end' }}>
+                                Threads not mapped
+                              </div>
+                            )}
+                          </div>
+                          {unmappedPlatforms.length > 0 && (
+                            <div className="info-box" style={{ marginTop: '10px', fontSize: '12px' }}>
+                              💡 <strong>Expand reach:</strong> {unmappedPlatforms.join(', ')} not mapped for <code>{acc.name}</code>. Add the linked handle{unmappedPlatforms.length > 1 ? 's' : ''} in <strong>Manage Directory</strong> to cross-post.
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -979,6 +1190,27 @@ function App() {
                       </div>
                     </div>
 
+                    <div className="mb-4" style={{ padding: '10px 12px', background: 'var(--bg)', borderRadius: '6px' }}>
+                      <div className="label" style={{ marginBottom: '6px' }}>Cross-post to</div>
+                      <div className="flex gap-4" style={{ flexWrap: 'wrap' }}>
+                        {[
+                          { key: 'crossPostFacebook', label: 'Facebook' },
+                          { key: 'crossPostTwitter', label: 'Twitter' },
+                          { key: 'crossPostThreads', label: 'Threads' }
+                        ].map(({ key, label }) => (
+                          <label key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer', userSelect: 'none' }}>
+                            <input
+                              type="checkbox"
+                              checked={hook[key] !== false}
+                              onChange={e => updateHook(hi, key, e.target.checked)}
+                              style={{ width: '16px', height: '16px', accentColor: 'var(--accent)', cursor: 'pointer' }}
+                            />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
                     {accounts.length > 0 && (
                       <div>
                         <div className="label" style={{ marginBottom: '6px' }}>Per account</div>
@@ -1061,36 +1293,96 @@ function App() {
         </div>
         </>)}
 
-        {output && (
+        {output && output.error && (
           <section className="mb-12">
-            <div className="card p-5">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h2 className="font-display" style={{ fontWeight: 600, fontSize: '20px' }}>Output</h2>
-                  {outputRowCount > 0 && !output.startsWith('⚠') && (
-                    <div style={{ color: 'var(--muted)', fontSize: '12px', marginTop: '2px' }}>
-                      {outputRowCount} row{outputRowCount !== 1 ? 's' : ''} · tab-separated
-                    </div>
-                  )}
-                </div>
-                <button onClick={copyOutput} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  {copied ? <><Check size={16} /> Copied!</> : <><Copy size={16} /> Copy to clipboard</>}
-                </button>
-              </div>
-              <div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '8px' }}>
-                Paste into your Google Sheet: click the first empty cell in the Date column, then Cmd/Ctrl+V.
-              </div>
-              <textarea
-                rows={Math.min(20, Math.max(6, output.split('\n').length))}
-                value={output}
-                readOnly
-                wrap="off"
-                style={{ fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: '12px', whiteSpace: 'pre', overflowX: 'auto' }}
-              />
-              <div style={{ marginTop: '12px', fontSize: '11px', color: 'var(--muted)' }}>
-                <strong style={{ color: 'var(--text)' }}>Columns:</strong> {COLUMN_HEADERS.join(' · ')}
-              </div>
+            <div className="card p-5" style={{ borderColor: 'var(--accent)' }}>
+              <div style={{ color: 'var(--accent)', fontSize: '14px', whiteSpace: 'pre-wrap' }}>{output.error}</div>
             </div>
+          </section>
+        )}
+
+        {output && !output.error && (output.igFb || output.twitter || output.threads) && (
+          <section className="mb-12 space-y-4">
+            {output.igFb && (
+              <div className="card p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h2 className="font-display" style={{ fontWeight: 600, fontSize: '20px' }}>IG / Facebook Posting Grid</h2>
+                    <div style={{ color: 'var(--muted)', fontSize: '12px', marginTop: '2px' }}>
+                      {output.igFbCount} row{output.igFbCount !== 1 ? 's' : ''} · paste into <code>IG_Posting_Grid</code> sheet
+                    </div>
+                  </div>
+                  <button onClick={() => copyOutput('igFb')} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    {copied === 'igFb' ? <><Check size={16} /> Copied!</> : <><Copy size={16} /> Copy</>}
+                  </button>
+                </div>
+                <textarea
+                  rows={Math.min(16, Math.max(6, output.igFb.split('\n').length))}
+                  value={output.igFb}
+                  readOnly
+                  wrap="off"
+                  style={{ fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: '12px', whiteSpace: 'pre', overflowX: 'auto' }}
+                />
+              </div>
+            )}
+
+            {output.twitter ? (
+              <div className="card p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h2 className="font-display" style={{ fontWeight: 600, fontSize: '20px' }}>Twitter Posting Grid</h2>
+                    <div style={{ color: 'var(--muted)', fontSize: '12px', marginTop: '2px' }}>
+                      {output.twitterCount} row{output.twitterCount !== 1 ? 's' : ''} · paste into <code>Twitter_Posting_Grid</code> sheet
+                    </div>
+                  </div>
+                  <button onClick={() => copyOutput('twitter')} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    {copied === 'twitter' ? <><Check size={16} /> Copied!</> : <><Copy size={16} /> Copy</>}
+                  </button>
+                </div>
+                <textarea
+                  rows={Math.min(16, Math.max(4, output.twitter.split('\n').length))}
+                  value={output.twitter}
+                  readOnly
+                  wrap="off"
+                  style={{ fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: '12px', whiteSpace: 'pre', overflowX: 'auto' }}
+                />
+              </div>
+            ) : (
+              <div className="card p-4" style={{ background: 'var(--bg)' }}>
+                <div style={{ color: 'var(--muted)', fontSize: '13px' }}>
+                  <strong>No Twitter rows.</strong> No account in this session has a Twitter handle mapped with a last-post date filled in.
+                </div>
+              </div>
+            )}
+
+            {output.threads ? (
+              <div className="card p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h2 className="font-display" style={{ fontWeight: 600, fontSize: '20px' }}>Threads Posting Grid</h2>
+                    <div style={{ color: 'var(--muted)', fontSize: '12px', marginTop: '2px' }}>
+                      {output.threadsCount} row{output.threadsCount !== 1 ? 's' : ''} · paste into <code>Threads_Posting_Grid</code> sheet
+                    </div>
+                  </div>
+                  <button onClick={() => copyOutput('threads')} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    {copied === 'threads' ? <><Check size={16} /> Copied!</> : <><Copy size={16} /> Copy</>}
+                  </button>
+                </div>
+                <textarea
+                  rows={Math.min(16, Math.max(4, output.threads.split('\n').length))}
+                  value={output.threads}
+                  readOnly
+                  wrap="off"
+                  style={{ fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: '12px', whiteSpace: 'pre', overflowX: 'auto' }}
+                />
+              </div>
+            ) : (
+              <div className="card p-4" style={{ background: 'var(--bg)' }}>
+                <div style={{ color: 'var(--muted)', fontSize: '13px' }}>
+                  <strong>No Threads rows.</strong> No account in this session has a Threads handle mapped with a last-post date filled in.
+                </div>
+              </div>
+            )}
           </section>
         )}
       </>)}
@@ -1177,22 +1469,59 @@ function App() {
             {showManageAccounts && (
               <div className="mt-4" style={{ paddingTop: '14px', borderTop: '1px solid var(--border)' }}>
                 <div className="label mb-2">Accounts by creator</div>
+                <div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '10px' }}>
+                  Each IG account can be linked to a Facebook account, Twitter handle, and Threads handle. Leave blank if not used.
+                </div>
                 {creators.length === 0 ? (
                   <div style={{ color: 'var(--muted)', fontSize: '13px' }}>Add a creator first.</div>
                 ) : (
                   creators.map(c => (
-                    <div key={c} className="mb-3">
-                      <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px', color: 'var(--accent)' }}>{c}</div>
+                    <div key={c} className="mb-4">
+                      <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '6px', color: 'var(--accent)' }}>{c}</div>
                       {(creatorAccounts[c] || []).length === 0 ? (
                         <div style={{ color: 'var(--muted)', fontSize: '12px', paddingLeft: '12px' }}>No accounts.</div>
                       ) : (
                         <div className="space-y-2">
                           {(creatorAccounts[c] || []).map(a => (
-                            <div key={a} className="flex items-center justify-between" style={{ padding: '4px 10px', marginLeft: '12px', background: 'var(--bg)', borderRadius: '4px' }}>
-                              <span style={{ fontSize: '13px' }}>{a}</span>
-                              <button onClick={() => removeAccountFromCreator(c, a)} className="btn-icon" title={`Remove ${a}`}>
-                                <Trash2 size={14} />
-                              </button>
+                            <div key={a.ig} style={{ padding: '10px 12px', marginLeft: '12px', background: 'var(--bg)', borderRadius: '6px' }}>
+                              <div className="flex items-center justify-between" style={{ marginBottom: '8px' }}>
+                                <span style={{ fontSize: '13px', fontWeight: 600, fontFamily: 'ui-monospace, monospace' }}>{a.ig}</span>
+                                <button onClick={() => removeAccountFromCreator(c, a.ig)} className="btn-icon" title={`Remove ${a.ig}`}>
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                <div>
+                                  <label className="label" style={{ fontSize: '10px' }}>Facebook account</label>
+                                  <input
+                                    type="text"
+                                    value={a.fb || ''}
+                                    onChange={e => updateAccountMapping(c, a.ig, { fb: e.target.value })}
+                                    placeholder="e.g. ND-phone-3"
+                                    style={{ fontSize: '12px', padding: '6px 8px' }}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="label" style={{ fontSize: '10px' }}>Twitter handle</label>
+                                  <input
+                                    type="text"
+                                    value={a.twitter || ''}
+                                    onChange={e => updateAccountMapping(c, a.ig, { twitter: e.target.value })}
+                                    placeholder="without @"
+                                    style={{ fontSize: '12px', padding: '6px 8px' }}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="label" style={{ fontSize: '10px' }}>Threads handle</label>
+                                  <input
+                                    type="text"
+                                    value={a.threads || ''}
+                                    onChange={e => updateAccountMapping(c, a.ig, { threads: e.target.value })}
+                                    placeholder="without @"
+                                    style={{ fontSize: '12px', padding: '6px 8px' }}
+                                  />
+                                </div>
+                              </div>
                             </div>
                           ))}
                         </div>
